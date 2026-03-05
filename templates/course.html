@@ -47,7 +47,18 @@
             <div class="content">{{ item.description }}</div>
             {% if item.materials %}
             <div class="materials">
+                <div class="note">資料</div>
                 {% for material in item.materials %}
+                {% with material=material %}
+                {% include 'material.html'  %}
+                {% endwith %}
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% if item.attachments %}
+            <div class="materials">
+                <div class="note">添付ファイル</div>
+                {% for material in item.attachments %}
                 {% with material=material %}
                 {% include 'material.html'  %}
                 {% endwith %}

@@ -3,9 +3,9 @@ from googleapiclient.discovery import build
 
 from jinja2 import Environment, FileSystemLoader
 
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, HttpError
 import io
-import requests
+import requests, os
 from datetime import datetime, timezone, timedelta
 
 SCOPES = [
@@ -16,6 +16,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/classroom.student-submissions.students.readonly",
     "https://www.googleapis.com/auth/classroom.rosters.readonly",
     "https://www.googleapis.com/auth/classroom.profile.photos",
+    "https://www.googleapis.com/auth/classroom.addons.student",
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 
@@ -44,17 +45,19 @@ for teacher in teachers:
         continue
     profile = teacher["profile"]
     user_profiles[teacher["userId"]] = profile
-    # if "photoUrl" in profile:
-    #     r = requests.get(f"https:{profile["photoUrl"]}", )
-    #     if r.status_code == 200:
-    #         with open(f"output/icons/{profile["id"]}.png", "wb") as f:
-    #             f.write(r.content)
-    #         print("Saved teacher icon:", profile["id"])
-    #     else:
-    #         print("Failed to save teacher icon:", profile["id"], "status_code:", r.status_code)
+    if "photoUrl" in profile:
+        path = f"output/icons/{profile["id"]}.png"
+        if os.path.exists(path):
+            print(f"Skip (already exists): {path}")
+        else:
+            r = requests.get(f"https:{profile["photoUrl"]}", )
+            if r.status_code == 200:
+                with open(path, "wb") as f:
+                    f.write(r.content)
+                print("Saved teacher icon:", profile["id"])
+            else:
+                print("Failed to save teacher icon:", profile["id"], "status_code:", r.status_code)
 
-# with open(f"output/example.json", "w", encoding="utf-8") as f:
-#     f.write(announcements.__str__())
 
 def get_jst_str(iso_str):
     utc_dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
@@ -64,13 +67,88 @@ def get_jst_str(iso_str):
     return jst_dt_str
 
 
+# driveFile download
+drive_service = build("drive", "v3", credentials=creds)
+
+def download_drive_file(file_id, filename):
+    path = f"output/driveFiles/id_{file_id}_name_{filename}"
+
+    if os.path.exists(path):
+        print(f"Skip (already exists): {filename}")
+        return
+    
+    request = drive_service.files().get_media(fileId=file_id)
+    fh = io.FileIO(path, "wb")
+    downloader = MediaIoBaseDownload(fh, request)
+
+    done = False
+    while not done:
+        try:
+            status, done = downloader.next_chunk()
+            print(f"filename: {filename}; file_id: {file_id}; progress: {int(status.progress() * 100)}%; done: {done}")
+        except HttpError as error:
+            print(f"Failed to download file; filename: {filename}; file_id: {file_id};")
+            print(error)
+        
+
 for item in list(announcements + course_work + course_work_materials):
     item["creatorUserProfile"] = user_profiles[item["creatorUserId"]]
     item["creationTime"] = get_jst_str(item["creationTime"])
     item["updateTime"] = get_jst_str(item["updateTime"])
     if item["creationTime"] == item["updateTime"]:
         item["updateTime"] = None
-    
+
+    if "materials" in item:
+        for material in item["materials"]:
+            if "driveFile" in material and "title" in material["driveFile"]["driveFile"]:
+                file_id = material["driveFile"]["driveFile"]["id"]
+                file_name = material["driveFile"]["driveFile"]["title"]
+                download_drive_file(file_id, file_name)
+
+# 提出物取得
+pageToken = None
+all_submissions = []
+
+while True:
+    result = service.courses().courseWork().studentSubmissions().list(
+        courseId=course["id"],
+        courseWorkId="-",
+        userId="me",
+        pageToken=pageToken
+    ).execute()
+
+    all_submissions.extend(result.get("studentSubmissions", []))
+
+    pageToken = result.get("nextPageToken")
+    if not pageToken:
+        break
+
+submission_map = {
+    s["courseWorkId"]: s
+    for s in all_submissions
+}
+
+for item in course_work:
+    submission = submission_map.get(item["id"])
+    if not submission:
+        continue
+
+    assignmentSubmission = submission.get("assignmentSubmission")
+    if not assignmentSubmission:
+        continue
+
+    attachments = assignmentSubmission.get("attachments", [])
+
+    item["attachments"] = attachments
+    for attachment in attachments:
+        if "driveFile" in attachment:
+            # Materialとのズレを修正するため
+            attachment["driveFile"]["driveFile"] = attachment["driveFile"]
+            if "title" in attachment["driveFile"]:
+                file_id = attachment["driveFile"]["id"]
+                file_name = attachment["driveFile"]["title"]
+                download_drive_file(file_id, file_name)
+
 
 html = template.render(
     name=course["name"],
@@ -80,26 +158,6 @@ html = template.render(
     course_work_materials=course_work_materials,
 )
 
-# driveFile download
-drive_service = build("drive", "v3", credentials=creds)
-
-def download_file(file_id, filename):
-    request = drive_service.files().get_media(fileId=file_id)
-    fh = io.FileIO(f"output/driveFiles/id_{file_id}_name_{filename}", "wb")
-    downloader = MediaIoBaseDownload(fh, request)
-
-    done = False
-    while not done:
-        status, done = downloader.next_chunk()
-        print(f"filename: {filename}; file_id: {file_id}; progress: {int(status.progress() * 100)}%; done: {done}")
-
-# for annoucement in announcements.get("announcements", []):
-#     if "materials" in annoucement:
-#         for material in annoucement["materials"]:
-#             if "driveFile" in material:
-#                 file_id = material["driveFile"]["driveFile"]["id"]
-#                 file_name = material["driveFile"]["driveFile"]["title"]
-#                 download_file(file_id, file_name)
 
 with open(f"output/クラス_{course["name"]}.html", "w", encoding="utf-8") as f:
     f.write(html)
