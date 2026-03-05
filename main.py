@@ -9,16 +9,21 @@ import requests, os
 from datetime import datetime, timezone, timedelta
 
 import shutil
+from tqdm import tqdm
 
 
 jst_today = datetime.now().astimezone(timezone(timedelta(hours=9)))
-jst_today_str = jst_today.strftime('%Y%m%d%H%m%S')
+jst_today_str = jst_today.strftime("%Y%m%d%H%M%S")
 
-base_dir = f"classroomArchive/archive_{jst_today_str}"
+# base_dir = f"classroomArchive/archive_{jst_today_str}"
+base_dir = f"classroomArchive/archive_20260305180358"
+print(f"保存先: {base_dir}")
 
-os.makedirs(f"{base_dir}")
-os.makedirs(f"{base_dir}/driveFiles")
-os.makedirs(f"{base_dir}/icons")
+os.makedirs(f"{base_dir}", exist_ok=True)
+os.makedirs(f"{base_dir}/driveFiles", exist_ok=True)
+os.makedirs(f"{base_dir}/css", exist_ok=True)
+os.makedirs(f"{base_dir}/img", exist_ok=True)
+os.makedirs(f"{base_dir}/img/icons", exist_ok=True)
 shutil.copy('materials/style.css', f"{base_dir}/css/style.css")
 shutil.copy('materials/assignment.svg', f"{base_dir}/img/assignment.svg")
 shutil.copy('materials/book.svg', f"{base_dir}/img/book.svg")
@@ -40,42 +45,84 @@ SCOPES = [
 flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
 creds = flow.run_local_server(port=0)
 service = build("classroom", "v1", credentials=creds)
-courses = service.courses().list().execute()
 
 env = Environment(loader=FileSystemLoader("materials"))
 template = env.get_template("course.html")
 
-user_profiles = {}
+def list_all(method, key):
+    items = []
+    page_token = None
+
+    while True:
+        result = method(pageToken=page_token).execute()
+        items.extend(result.get(key, []))
+        page_token = result.get("nextPageToken")
+
+        if not page_token:
+            break
+
+    return items
+
+courses = list_all(
+    lambda **kwargs: service.courses().list(**kwargs),
+    "courses"
+)
 
 # for course in courses.get("courses", []):
-course = courses.get("courses", [])[4]
+course = courses[4]
 print(f"コース情報: {course}")
 
+announcements = list_all(
+    lambda **kwargs: service.courses().announcements().list(courseId=course["id"], **kwargs),
+    "announcements"
+)
+course_work = list_all(
+    lambda **kwargs: service.courses().courseWork().list(courseId=course["id"], **kwargs),
+    "courseWork"
+)
+course_work_materials = list_all(
+    lambda **kwargs: service.courses().courseWorkMaterials().list(courseId=course["id"], **kwargs),
+    "courseWorkMaterial"
+)
+teachers = list_all(
+    lambda **kwargs: service.courses().teachers().list(courseId=course["id"], **kwargs),
+    "teachers"
+)
+topics = list_all(
+    lambda **kwargs: service.courses().topics().list(courseId=course["id"], **kwargs),
+    "topic"
+)
+submissions = list_all(
+    lambda **kwargs: service.courses().courseWork().studentSubmissions().list(
+        courseId=course["id"],
+        courseWorkId="-",
+        userId="me",
+        **kwargs
+    ),
+    "studentSubmissions"
+)
 
-announcements = service.courses().announcements().list(courseId=course["id"]).execute().get("announcements", [])
-course_work = service.courses().courseWork().list(courseId=course["id"]).execute().get("courseWork", [])
-course_work_materials = service.courses().courseWorkMaterials().list(courseId=course["id"]).execute().get("courseWorkMaterial", [])
-teachers = service.courses().teachers().list(courseId=course["id"]).execute().get("teachers", [])
-topics = service.courses().topics().list(courseId=course["id"]).execute().get("topic", [])
+user_profiles = {}
 
-for teacher in teachers:
+for teacher in tqdm(teachers, desc="教師アイコンを取得中"):
     if teacher["userId"] in user_profiles:
         continue
     profile = teacher["profile"]
     user_profiles[teacher["userId"]] = profile
     if "photoUrl" in profile:
-        path = f"{base_dir}/icons/{profile["id"]}.png"
+        path = f"{base_dir}/img/icons/{profile["id"]}.png"
         if os.path.exists(path):
-            print(f"Skip (already exists): {path}")
+            print(f"Skip (already exists): {path}.png;")
         else:
             r = requests.get(f"https:{profile["photoUrl"]}", )
             if r.status_code == 200:
                 with open(path, "wb") as f:
                     f.write(r.content)
-                print("Saved teacher icon:", profile["id"])
+                print(f"Saved teacher icon: {path}.png;")
             else:
-                print("Failed to save teacher icon:", profile["id"], "status_code:", r.status_code)
+                print(f"Failed to save teacher icon: {path}.png; status_code: {r.status_code};")
 
+drive_files_to_download = []
 
 def get_jst_str(iso_str):
     utc_dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
@@ -107,7 +154,9 @@ def download_drive_file(file_id, filename):
         except HttpError as error:
             print(f"Failed to download file; filename: {filename}; file_id: {file_id};")
             print(error)
+            done = True
 
+# 授業のトピック
 topic_map = {
     topic["topicId"]: topic
     for topic in topics
@@ -126,29 +175,12 @@ for item in list(announcements + course_work + course_work_materials):
             if "driveFile" in material and "title" in material["driveFile"]["driveFile"]:
                 file_id = material["driveFile"]["driveFile"]["id"]
                 file_name = material["driveFile"]["driveFile"]["title"]
-                download_drive_file(file_id, file_name)
+                drive_files_to_download.append((file_id, file_name))
 
-# 提出物取得
-pageToken = None
-all_submissions = []
-
-while True:
-    result = service.courses().courseWork().studentSubmissions().list(
-        courseId=course["id"],
-        courseWorkId="-",
-        userId="me",
-        pageToken=pageToken
-    ).execute()
-
-    all_submissions.extend(result.get("studentSubmissions", []))
-
-    pageToken = result.get("nextPageToken")
-    if not pageToken:
-        break
-
+# 提出物（課題の添付ファイル）
 submission_map = {
     s["courseWorkId"]: s
-    for s in all_submissions
+    for s in submissions
 }
 
 for item in course_work:
@@ -166,11 +198,12 @@ for item in course_work:
     for attachment in attachments:
         if "driveFile" in attachment:
             # Materialとのズレを修正するため
+            # テンプレートではMaterialと同様に扱う
             attachment["driveFile"]["driveFile"] = attachment["driveFile"]
             if "title" in attachment["driveFile"]:
                 file_id = attachment["driveFile"]["id"]
                 file_name = attachment["driveFile"]["title"]
-                download_drive_file(file_id, file_name)
+                drive_files_to_download.append((file_id, file_name))
 
 for item in announcements:
     item["item_type"] = "Announcement"
@@ -191,6 +224,13 @@ html = template.render(
     all_items=all_items
 )
 
-
-with open(f"output/クラス_{course["name"]}.html", "w", encoding="utf-8") as f:
+with open(f"{base_dir}/クラス_{course["name"]}.html", "w", encoding="utf-8") as f:
     f.write(html)
+
+from concurrent.futures import ThreadPoolExecutor
+
+for item in tqdm(drive_files_to_download, desc="ドライブファイルをダウンロード中"):
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        ex.map(lambda file: download_drive_file(file[0], file[1]), drive_files_to_download)
+
+print(f"完了しました。アーカイブは {base_dir} に出力されています。")
