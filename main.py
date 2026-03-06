@@ -129,6 +129,9 @@ stop_event = threading.Event()
 
 user_profiles = {}
 pictures_to_download = set()
+drive_files_to_download = set()
+file_cache = {}
+files_to_download_size = 0
 
 
 def get_jst_str(iso_str):
@@ -147,12 +150,16 @@ def get_file_type_name(mime_type):
         return "Google スライド"
     elif mime_type == "application/vnd.google-apps.spreadsheet":
         return "Google スプレッドシート"
-    elif mime_type == "application/pdf":
-        return "PDF"
+    else:
+        return None
+
+def get_download_file_path(id, name):
+    return f"{base_dir}/driveFiles/id_{id}_name_{name}"
 
 # (dict | None) を返す。
-# filename は sanitize 後のものを渡すこと！
-def download_drive_file(file_id, file_name):
+# ダウンロード可能なファイルのみリストに追加し、それ以外はドライブにコピーする。
+def add_drive_file(file_id, file_name):
+    global files_to_download_size
     # 強制終了用
     if stop_event.is_set():
         print(f"Cancelled: {file_name}")
@@ -169,7 +176,7 @@ def download_drive_file(file_id, file_name):
     file_name = file_name.rstrip(" .")
 
     file_type = None
-    path = f"{base_dir}/driveFiles/id_{file_id}_name_{file_name}"
+    path = get_download_file_path(file_id, file_name)
 
     if os.path.exists(path):
         print(f"Skip (already exists): {file_name}")
@@ -180,89 +187,118 @@ def download_drive_file(file_id, file_name):
         return {
             "file_name": file_name,
             "file_type": file_type,
-            "was_saved": True
+            "is_saved": True,
         }
     
     try:
-        file = drive_service.files().get(
-            fileId=file_id,
-            fields="name,mimeType,size"
-        ).execute()
-
-        file_name = file["name"]
+        if file_id in file_cache:
+            file = file_cache[file_id]
+        else:
+            # 仮に404ならここでエラーが出る
+            file = drive_service.files().get(
+                fileId=file_id,
+                fields="name,mimeType,size"
+            ).execute()
+            file_cache[file_id] = file
+        
         mime_type = file["mimeType"]
+        size = int(file["size"])
 
         extension = mimetypes.guess_extension(mime_type)
         if extension:
-            file_type = extension.upper()[1:]
+            file_type = f"{extension.upper()[1:]} ファイル"
+        else:
+            file_type = get_file_type_name(mime_type)
 
         # 拡張子が必要な場合は付与
         if "." not in file_name and not mime_type.startswith("application/vnd.google-apps"):
             if extension:
                 file_name += extension
-        
-        # Google ファイル以外はダウンロード試行
-        if not mime_type.startswith("application/vnd.google-apps"):
-            request = drive_service.files().get_media(fileId=file_id)
-            fh = io.FileIO(path, "wb")
-            downloader = MediaIoBaseDownload(fh, request)
 
-            done = False
-            while not done:
-                try:
-                    status, done = downloader.next_chunk()
-                    print(f"filename: {file_name}; file_id: {file_id}; progress: {int(status.progress() * 100)}%; done: {done}")
-                    return {
-                        "file_name": file_name,
-                        "file_type": file_type,
-                        "was_saved": True
-                    }
-                except HttpError as error:
-                    if error.status_code == 404:
-                        print(f"Failed to download file; filename: {file_name}; file_id: {file_id};")
-                        print(error)
-                        return None
-        
-        # 404以外で失敗 or Google系ファイルの場合
-        file = drive_service.files().copy(
-            fileId=file_id,
-            body={
-                "name": file_name,
-                "parents": [archive_folder_id] # Apps Script (.gs) は親フォルダ指定無視でドライブ直下に保存される
-            },
-            fields="id,name,webViewLink,mimeType"
-        ).execute()
-        print(f"ダウンロードできなかったため、ドライブにコピーが作成されました。ファイル名: {file["name"]}, リンク: {file['webViewLink']}")
+        if mime_type == "application/vnd.google-apps.folder":
+            print(f"フォルダはダウンロードできません。name: {file_name}")
+            return None
 
-        return {
-            "file_name": file_name,
-            "file_type": file_type,
-            "was_saved": True,
-            "web_view_link": file["webViewLink"],
-        }
+        elif mime_type.startswith("application/vnd.google-apps."):
+            copied_file = drive_service.files().copy(
+                fileId=file_id,
+                body={
+                    "name": file_name,
+                    "parents": [archive_folder_id] # Apps Script (.gs) は親フォルダ指定無視でドライブ直下に保存される
+                },
+                fields="id,name,webViewLink,mimeType"
+            ).execute()
+            print(f"ダウンロードできないファイル形式のため、マイドライブにコピーが作成されました。ファイル名: {copied_file["name"]}, リンク: {copied_file['webViewLink']}")
+
+            return {
+                "file_name": file_name,
+                "file_type": file_type,
+                "is_saved": False,
+                "web_view_link": copied_file["webViewLink"],
+            }
+        else:
+            drive_files_to_download.add((file_id, file_name))
+            files_to_download_size += size
+
+            return {
+                "file_name": file_name,
+                "file_type": file_type,
+                "is_saved": True,
+            }
 
     except HttpError as e:
-        print(f"Failed to download file; filename: {file_name}; file_id: {file_id};")
+        print(f"Failed to get file information; filename: {file_name}; file_id: {file_id};")
         print(e)
+
     return None
 
 
 def download_file(url, path):
-    r = requests.get(url, timeout=10)
+    # 強制終了用
+    if stop_event.is_set():
+        print(f"Cancelled: {path}")
+        return 
+    
+    r = requests.get(url, )
     if r.status_code == 200:
         with open(path, "wb") as f:
             f.write(r.content)
-        print(f"Saved {path}.png")
     else:
         print(f"Failed to save {path}.png; status_code: {r.status_code};")
 
 
+# Google ファイル以外のダウンロード
+def download_drive_file(file_id, file_name):
+    # 強制終了用
+    if stop_event.is_set():
+        print(f"Cancelled: {file_name}")
+        return None
+
+    if not hasattr(thread_local, "drive_service"):
+        thread_local.drive_service = build("drive", "v3", credentials=creds)
+
+    drive_service = thread_local.drive_service
+    
+    path = get_download_file_path(file_id, file_name)
+
+    try:
+        request = drive_service.files().get_media(fileId=file_id)
+        fh = io.FileIO(path, "wb")
+        downloader = MediaIoBaseDownload(fh, request)
+
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+            # print(f"filename: {file_name}; file_id: {file_id}; progress: {int(status.progress() * 100)}%; done: {done}")
+    except HttpError as error:
+        print(f"Failed to download file; filename: {file_name}; file_id: {file_id};")
+        print(error)
+        done = True
+
+
 # コース別の処理
 for course in courses:
-    print(course)
     print(f"クラス名: {course["name"]}")
-    if course["name"] != "赤団(高１～３)":
-        continue
 
     announcements = list_all(
         lambda **kwargs: service.courses().announcements().list(courseId=course["id"], **kwargs),
@@ -306,7 +342,7 @@ for course in courses:
         if "photoUrl" in profile:
             path = f"{base_dir}/img/icons/{profile["id"]}.png"
             if os.path.exists(path):
-                print(f"Skip (already exists): {path}.png;")
+                print(f"Skip (already exists): {path};")
             else:
                 pictures_to_download.add((f"https:{profile["photoUrl"]}", path))
 
@@ -341,12 +377,14 @@ for course in courses:
                 attachment["driveFile"]["driveFile"] = attachment["driveFile"]
                 drive_file = attachment["driveFile"]["driveFile"]
                 if "title" in drive_file:
-                    file_dict = download_drive_file(drive_file["id"], drive_file["title"])
-                    drive_file["title"] = file_dict["file_name"] # 拡張子補完等のため必要
-                    drive_file["file_type"] = file_dict["file_type"]
-                    drive_file["was_saved"] = file_dict["was_saved"]
-                    if "web_view_link" in file_dict:
-                        drive_file["web_view_link"] = file_dict["web_view_link"]
+                    drive_file = attachment["driveFile"]["driveFile"]
+                    file_dict = add_drive_file(drive_file["id"], drive_file["title"])
+                    if file_dict:
+                        drive_file["title"] = file_dict["file_name"] # 拡張子補完等のため必要
+                        drive_file["file_type"] = file_dict["file_type"]
+                        drive_file["is_saved"] = file_dict["is_saved"]
+                        if "web_view_link" in file_dict:
+                            drive_file["web_view_link"] = file_dict["web_view_link"]
 
 
     def get_all_materials(item):
@@ -374,12 +412,13 @@ for course in courses:
             for material in item["materials"]:
                 if "driveFile" in material and "title" in material["driveFile"]["driveFile"]:
                     drive_file = material["driveFile"]["driveFile"]
-                    file_dict = download_drive_file(drive_file["id"], drive_file["title"])
-                    drive_file["title"] = file_dict["file_name"] # 拡張子補完等のため必要
-                    drive_file["file_type"] = file_dict["file_type"]
-                    drive_file["was_saved"] = file_dict["was_saved"]
-                    if "web_view_link" in file_dict:
-                        drive_file["web_view_link"] = file_dict["web_view_link"]
+                    file_dict = add_drive_file(drive_file["id"], drive_file["title"])
+                    if file_dict:
+                        drive_file["title"] = file_dict["file_name"] # 拡張子補完等のため必要
+                        drive_file["file_type"] = file_dict["file_type"]
+                        drive_file["is_saved"] = file_dict["is_saved"]
+                        if "web_view_link" in file_dict:
+                            drive_file["web_view_link"] = file_dict["web_view_link"]
 
 
     for item in announcements:
@@ -397,13 +436,12 @@ for course in courses:
     try:
         with ThreadPoolExecutor(max_workers=8) as executor:
             # 先に全タスクをsubmitし、futureオブジェクトをリスト化する
-            futures = [executor.submit(download_file, picture[0], picture[1]) for picture in pictures_to_download]
-            futures += [executor.submit(get_course_work_attachments, item) for item in course_works]
+            futures = [executor.submit(get_course_work_attachments, item) for item in course_works]
             futures += [executor.submit(get_all_materials, item) for item in all_items]
             
             # as_completedで終わったものから取り出し、tqdmでラップする
             results = []
-            for future in tqdm(as_completed(futures), total=len(futures), desc="ファイルを保存中"):
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"{course["name"]}のファイルを整理中"):
                 results.append(future.result())
 
     except KeyboardInterrupt:
@@ -422,5 +460,37 @@ for course in courses:
 
     with open(f"{base_dir}/クラス_{course["name"]}.html", "w", encoding="utf-8") as f:
         f.write(html)
+
+
+def format_size(size):
+    size = int(size)
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if size < 1024:
+            return f"{size:.2f} {unit}"
+        size /= 1024
+
+print("\n==============================")
+print(f"ダウンロード予定ファイル数: {len(drive_files_to_download)}")
+print(f"合計容量: {format_size(files_to_download_size)}")
+print("==============================")
+
+confirm = input("ダウンロードを開始しますか？ (y/N): ").strip().lower()
+
+if confirm != "y":
+    print("処理を中止しました。")
+    exit()
+
+
+try:
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(download_file, picture[0], picture[1]) for picture in pictures_to_download]
+        futures += [executor.submit(download_drive_file, file[0], file[1]) for file in drive_files_to_download]
+        
+        results = []
+        for future in tqdm(as_completed(futures), total=len(futures), desc=f"ファイルを保存中"):
+            results.append(future.result())
+
+except KeyboardInterrupt:
+    stop_event.set()
 
 print(f"完了しました。アーカイブは {base_dir} に出力されています。")

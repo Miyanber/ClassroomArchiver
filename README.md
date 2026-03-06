@@ -1,6 +1,5 @@
 # ClassroomArchiver
-Export your Google Classroom into a fully browsable HTML archive.
-
+Export your Google Classroom into a browsable HTML archive.
 
 ## 説明
 
