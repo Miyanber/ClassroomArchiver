@@ -99,17 +99,6 @@
                 {% endfor %}
             </div>
         </div>
-        <div class="members-wrapper">
-            <h3>クラスメイト<span class="members-count">生徒 {{ students_count }} 人</span></h3>
-            <div class="members">
-                {% for student in students %}
-                <div class="member">
-                    <img class="photo" src="./img/icons/{{ student.userId }}.png" alt="アイコン">
-                    <div class="name">{{ student.profile.name.fullName }}</div>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
     </section>
 </body>
 </html>
