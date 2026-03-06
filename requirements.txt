@@ -1,3 +1,4 @@
+altgraph==0.17.5
 certifi==2026.2.25
 cffi==2.0.0
 charset-normalizer==3.4.4
@@ -14,15 +15,21 @@ idna==3.11
 Jinja2==3.1.6
 MarkupSafe==3.0.3
 oauthlib==3.3.1
+packaging==26.0
+pefile==2024.8.26
 proto-plus==1.27.1
 protobuf==6.33.5
 pyasn1==0.6.2
 pyasn1_modules==0.4.2
 pycparser==3.0
+pyinstaller==6.19.0
+pyinstaller-hooks-contrib==2026.2
 pyparsing==3.3.2
+pywin32-ctypes==0.2.3
 requests==2.32.5
 requests-oauthlib==2.0.0
 rsa==4.9.1
+setuptools==82.0.0
 tdqm==0.0.1
 tqdm==4.67.3
 uritemplate==4.2.0
