@@ -253,6 +253,10 @@ for course in courses:
         lambda **kwargs: service.courses().teachers().list(courseId=course["id"], **kwargs),
         "teachers"
     )
+    students = list_all(
+        lambda **kwargs: service.courses().students().list(courseId=course["id"], **kwargs),
+        "students"
+    )
     topics = list_all(
         lambda **kwargs: service.courses().topics().list(courseId=course["id"], **kwargs),
         "topic"
@@ -267,11 +271,11 @@ for course in courses:
         "studentSubmissions"
     )
 
-    for teacher in teachers:
-        if teacher["userId"] in user_profiles:
+    for user in list(teachers + students):
+        if user["userId"] in user_profiles:
             continue
-        profile = teacher["profile"]
-        user_profiles[teacher["userId"]] = profile
+        profile = user["profile"]
+        user_profiles[user["userId"]] = profile
         if "photoUrl" in profile:
             path = f"{base_dir}/img/icons/{profile["id"]}.png"
             if os.path.exists(path):
@@ -368,6 +372,9 @@ for course in courses:
         announcements=announcements,
         course_work=course_works,
         course_work_materials=course_work_materials,
+        teachers=teachers,
+        students=students,
+        students_count=(len(students) + 1),
         all_items=all_items
     )
 
