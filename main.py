@@ -236,6 +236,8 @@ def download_file(url, path):
 for course in courses:
     print(course)
     print(f"クラス名: {course["name"]}")
+    if course["name"] != "高３空理系（英コミュ・論国・数Ⅲ・数C・化学・物理）":
+        continue
 
     announcements = list_all(
         lambda **kwargs: service.courses().announcements().list(courseId=course["id"], **kwargs),
