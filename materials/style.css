@@ -163,3 +163,56 @@ section {
         }
     }
 }
+
+h3 {
+    position: relative;
+    border-bottom: .0625rem solid #e0e0e0;
+    padding: 1rem;
+    font-size: 1.5rem;
+
+    .members-count {
+        position: absolute;
+        right: 1.5rem;
+        bottom: 1rem;
+        font-size: .875rem;
+        letter-spacing: 0;
+        font-weight: 500;
+        color: #1f1f1f;
+    }
+}
+
+.members {
+    display: flex;
+    flex-direction: column;
+    padding: .5rem 0;
+
+    .member {
+        display: flex;
+        padding-bottom: 1rem;
+        border-bottom: .0625rem solid #e0e0e0;
+        margin-bottom: 1rem;
+
+        .photo {
+            height: 2rem;
+            width: 2rem;
+            border-radius: 50%;
+            margin: 0 1rem;
+            flex-shrink: 0;
+        }
+        .name {
+            display: block;
+            font-size: .875rem;
+            font-weight: 500;
+            line-height: 1.25rem;
+            margin: .375rem 0;
+            flex-shrink: 0;
+            text-overflow: ellipsis;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+    }
+
+    .member:last-child {
+        border-bottom: none;
+    }
+}

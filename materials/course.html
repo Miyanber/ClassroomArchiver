@@ -24,7 +24,17 @@
     </header>
 
     <section>
-        <h2 id="announcements">ストリーム</h2>
+        <h2>目次</h2>
+        <nav>
+            <ul>
+                <li><a href="#stream">ストリーム</a></li>
+                <li><a href="#members">メンバー</a></li>
+            </ul>
+        </nav>
+    </section>
+
+    <section>
+        <h2 id="stream">ストリーム</h2>
         {% for item in all_items %}
         <div class="announcement">
             <div class="header">
@@ -74,6 +84,32 @@
             {% endif %}
         </div>
         {% endfor %}
+    </section>
+
+    <section>
+        <h2 id="members">メンバー</h2>
+        <div class="members-wrapper">
+            <h3>教師</h3>
+            <div class="members">
+                {% for teacher in teachers %}
+                <div class="member">
+                    <img class="photo" src="./img/icons/{{ teacher.userId }}.png" alt="アイコン">
+                    <div class="name">{{ teacher.profile.name.fullName }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="members-wrapper">
+            <h3>クラスメイト<span class="members-count">生徒 {{ students_count }} 人</span></h3>
+            <div class="members">
+                {% for student in students %}
+                <div class="member">
+                    <img class="photo" src="./img/icons/{{ student.userId }}.png" alt="アイコン">
+                    <div class="name">{{ student.profile.name.fullName }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
     </section>
 </body>
 </html>
