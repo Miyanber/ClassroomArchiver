@@ -4,37 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="./css/style.css">
-    <title>{{ name }}</title>
+    <title>{{ course.name }} {{ course.section }}</title>
 </head>
 <body>
     <div></div>
 
     <section>
-        <h1>{{ name }}</h1>
-        {% if section %}<p class="section">{{ section }}</p>{% endif %}
-
-        <h2>補足</h2>
-        <p>
-            <ul>
-                <li>このクラスの全てのお知らせ・課題・資料が、添付ファイルと共にPCに保存されています。</li>
-                <li>以下の内容はローカルに保存されません。ご注意ください。</li>
-                <ul>
-                    <li>投稿に対するコメント</li>
-                    <li>課題内の限定公開のコメント</li>
-                    <li>ドライブファイル内のコメント</li>
-                    <li>Google Forms</li>
-                </ul>
-                <li>
-                    以下の内容はローカルには保存されませんが、マイドライブの ClassroomArchive フォルダ内にファイルのコピーが作成されます。
-                    ※マイドライブはアカウント停止と同時にアクセスできなくなります。アカウント移行時に Google Drive を移行内容に含めることで、データを保持することができます。
-                </li>
-                <ul>
-                    <li>Google Docs ファイル</li>
-                    <li>Google Slides ファイル</li>
-                    <li>Google Sheets ファイル</li>
-                </ul>
-            </ul>
-        </p>
+        <h1>{{ course.name }}</h1>
+        {% if course.section %}<p class="section">{{ course.section }}</p>{% endif %}
 
         <h2 id="announcements">ストリーム</h2>
         {% for item in all_items %}

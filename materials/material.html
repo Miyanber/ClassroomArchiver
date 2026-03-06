@@ -8,7 +8,6 @@
             {% if drive_file.file_type_name %}{{ drive_file.file_type_name }}{% else %}ドライブファイル{% endif %}
             {% if not drive_file.was_saved %}（ローカルに保存されていません）{% endif %}
         </p>
-        {% endif %}
     </a>
     {% else %}
     <a target="_blank" href="{{ drive_file.alternateLink }}">
