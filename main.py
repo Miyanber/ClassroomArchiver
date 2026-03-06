@@ -182,75 +182,85 @@ def add_drive_file(file_id, file_name):
         print(f"Skip (already exists): {file_name}")
         mime_type = mimetypes.guess_file_type(file_name)[0]
         if mime_type:
-            extension = mimetypes.guess_extension(mime_type)
-            file_type = extension.upper()[1:]
+            drive_extension = mimetypes.guess_extension(mime_type)
+            file_type = drive_extension.upper()[1:]
         return {
             "file_name": file_name,
             "file_type": file_type,
             "is_saved": True,
         }
     
-    try:
-        if file_id in file_cache:
-            file = file_cache[file_id]
-        else:
+    if file_id in file_cache:
+        file = file_cache[file_id]
+    else:
+        try:
             # 仮に404ならここでエラーが出る
             file = drive_service.files().get(
                 fileId=file_id,
-                fields="name,mimeType,size"
+                fields="name,mimeType,size,capabilities"
             ).execute()
             file_cache[file_id] = file
-        
-        mime_type = file["mimeType"]
-        size = int(file["size"])
-
-        extension = mimetypes.guess_extension(mime_type)
-        if extension:
-            file_type = f"{extension.upper()[1:]} ファイル"
-        else:
-            file_type = get_file_type_name(mime_type)
-
-        # 拡張子が必要な場合は付与
-        if "." not in file_name and not mime_type.startswith("application/vnd.google-apps"):
-            if extension:
-                file_name += extension
-
-        if mime_type == "application/vnd.google-apps.folder":
-            print(f"フォルダはダウンロードできません。name: {file_name}")
+            if not "size" in file:
+                file["size"] = 0
+        except HttpError as e:
+            print(f"Failed to get file information; filename: {file_name}; file_id: {file_id};")
+            print(e)
             return None
+        
+    mime_type = file["mimeType"]
+    size = int(file["size"])
 
-        elif mime_type.startswith("application/vnd.google-apps."):
-            copied_file = drive_service.files().copy(
-                fileId=file_id,
-                body={
-                    "name": file_name,
-                    "parents": [archive_folder_id] # Apps Script (.gs) は親フォルダ指定無視でドライブ直下に保存される
-                },
-                fields="id,name,webViewLink,mimeType"
-            ).execute()
-            print(f"ダウンロードできないファイル形式のため、マイドライブにコピーが作成されました。ファイル名: {copied_file["name"]}, リンク: {copied_file['webViewLink']}")
+    drive_extension = mimetypes.guess_extension(mime_type)
+    if drive_extension:
+        file_type = f"{drive_extension.upper()[1:]} ファイル"
+    else:
+        file_type = get_file_type_name(mime_type)
 
-            return {
-                "file_name": file_name,
-                "file_type": file_type,
-                "is_saved": False,
-                "web_view_link": copied_file["webViewLink"],
-            }
+    _, name_extension = os.path.splitext(file_name)
+
+    # 拡張子が必要な場合は付与
+    if drive_extension and name_extension != drive_extension and not mime_type.startswith("application/vnd.google-apps"):
+        file_name += drive_extension
+
+    if mime_type == "application/vnd.google-apps.folder":
+        print(f"フォルダはダウンロードできません。ファイル名: {file_name}")
+        return None
+
+    elif mime_type.startswith("application/vnd.google-apps.") and file["capabilities"]["canCopy"]:
+        copied_file = drive_service.files().copy(
+            fileId=file_id,
+            body={
+                "name": file_name,
+                "parents": [archive_folder_id] # Apps Script (.gs) は親フォルダ指定無視でドライブ直下に保存される
+            },
+            fields="id,name,webViewLink,mimeType"
+        ).execute()
+        print(f"ダウンロードできないファイル形式のため、マイドライブにコピーが作成されました。ファイル名: {copied_file["name"]}, リンク: {copied_file['webViewLink']}")
+
+        return {
+            "file_name": file_name,
+            "file_type": file_type,
+            "is_saved": False,
+            "web_view_link": copied_file["webViewLink"],
+        }
+    
+    elif file["capabilities"]["canDownload"]:
+        drive_files_to_download.add((file_id, file_name))
+        files_to_download_size += size
+
+        return {
+            "file_name": file_name,
+            "file_type": file_type,
+            "is_saved": True,
+        }
+    else:
+        if not file["capabilities"]["canDownload"]:
+            print(f"ファイルのダウンロードが許可されていません。ファイル名: {file_name}; ファイルID: {file_id};")
+        elif not file["capabilities"]["canCopy"]:
+            print(f"ファイルのコピーが許可されていません。ファイル名: {file_name}; ファイルID: {file_id};")
         else:
-            drive_files_to_download.add((file_id, file_name))
-            files_to_download_size += size
-
-            return {
-                "file_name": file_name,
-                "file_type": file_type,
-                "is_saved": True,
-            }
-
-    except HttpError as e:
-        print(f"Failed to get file information; filename: {file_name}; file_id: {file_id};")
-        print(e)
-
-    return None
+            print(f"ファイルがダウンロードできません。ファイル名: {file_name}; ファイルID: {file_id};")
+        return None
 
 
 def download_file(url, path):
@@ -298,6 +308,11 @@ def download_drive_file(file_id, file_name):
 
 # コース別の処理
 for course in courses:
+    # 強制終了用
+    if stop_event.is_set():
+        print(f"Cancelled: {course}")
+        exit()
+
     print(f"クラス名: {course["name"]}")
 
     announcements = list_all(
@@ -482,7 +497,7 @@ if confirm != "y":
 
 
 try:
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [executor.submit(download_file, picture[0], picture[1]) for picture in pictures_to_download]
         futures += [executor.submit(download_drive_file, file[0], file[1]) for file in drive_files_to_download]
         
