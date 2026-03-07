@@ -4,7 +4,7 @@ from googleapiclient.discovery import build
 from jinja2 import Environment, FileSystemLoader
 from datetime import datetime, timezone, timedelta
 from tqdm import tqdm
-import io, requests, os
+import io, requests, os, sys
 import signal
 import shutil
 import mimetypes
@@ -19,15 +19,22 @@ jst_today_str = jst_today.strftime("%Y%m%d%H%M%S")
 base_dir = f"classroomArchive/archive_{jst_today_str}"
 print(f"保存先: {base_dir}")
 
+def resource_path(path):
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, path)
+    return os.path.join(os.path.abspath("."), path)
+
+materials_dir = resource_path("materials")
+
 os.makedirs(f"{base_dir}", exist_ok=True)
 os.makedirs(f"{base_dir}/driveFiles", exist_ok=True)
 os.makedirs(f"{base_dir}/css", exist_ok=True)
 os.makedirs(f"{base_dir}/img", exist_ok=True)
 os.makedirs(f"{base_dir}/img/icons", exist_ok=True)
-shutil.copy('materials/style.css', f"{base_dir}/css/style.css")
-shutil.copy('materials/assignment.svg', f"{base_dir}/img/assignment.svg")
-shutil.copy('materials/book.svg', f"{base_dir}/img/book.svg")
-shutil.copy('materials/user.svg', f"{base_dir}/img/user.svg")
+shutil.copy(os.path.join(materials_dir, "style.css"), f"{base_dir}/css/style.css")
+shutil.copy(os.path.join(materials_dir, "assignment.svg"), f"{base_dir}/img/assignment.svg")
+shutil.copy(os.path.join(materials_dir, "book.svg"), f"{base_dir}/img/book.svg")
+shutil.copy(os.path.join(materials_dir, "user.svg"), f"{base_dir}/img/user.svg")
 
 SCOPES = [
     "https://www.googleapis.com/auth/classroom.courses.readonly",
@@ -37,7 +44,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/classroom.student-submissions.students.readonly",
     "https://www.googleapis.com/auth/classroom.rosters.readonly",
     "https://www.googleapis.com/auth/classroom.profile.photos",
-    "https://www.googleapis.com/auth/classroom.addons.student",
     "https://www.googleapis.com/auth/classroom.topics.readonly",
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",
@@ -46,6 +52,9 @@ SCOPES = [
 flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
 creds = flow.run_local_server(port=0)
 service = build("classroom", "v1", credentials=creds)
+
+env = Environment(loader=FileSystemLoader(materials_dir))
+template = env.get_template("course.html")
 
 archive_folder_id = None
 
@@ -94,13 +103,10 @@ try:
     file = drive_service.files().create(body=file_metadata, fields="id").execute()
     archive_folder_id = file.get("id")
     
-
 except HttpError as error:
     print(f"An error occurred: {error}")
     exit(0)
 
-env = Environment(loader=FileSystemLoader("materials"))
-template = env.get_template("course.html")
 
 def list_all(method, key):
     items = []
