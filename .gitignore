@@ -211,5 +211,7 @@ credentials.json
 classroomArchive/*
 example.json
 archive_folder_id.txt
+release/
+ClassroomArchiver.zip
 
 .vscode/
