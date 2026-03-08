@@ -17,7 +17,45 @@ jst_today = datetime.now().astimezone(timezone(timedelta(hours=9)))
 jst_today_str = jst_today.strftime("%Y%m%d%H%M%S")
 
 base_dir = f"classroomArchive/archive_{jst_today_str}"
-print(f"保存先: {base_dir}")
+
+# ロギングの設定
+import logging
+from colorama import init, Fore, Style
+
+# coloramaの初期化（WindowsのANSIエスケープシーケンス対応）
+init(autoreset=True)
+
+log_dir = os.path.join(base_dir, "logs")
+os.makedirs(log_dir, exist_ok=True)
+log_file = os.path.join(log_dir, f"archive_{jst_today_str}.log")
+
+logger = logging.getLogger("ClassroomArchiver")
+logger.setLevel(logging.DEBUG)
+
+file_handler = logging.FileHandler(log_file, encoding='utf-8')
+file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+file_handler.setFormatter(file_formatter)
+
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+def log_info(msg):
+    logger.info(msg)
+
+def log_error(msg):
+    logger.error(f"{Fore.RED}{msg}{Style.RESET_ALL}", exc_info=True)
+
+def log_warning(msg):
+    logger.warning(f"{Fore.YELLOW}{msg}{Style.RESET_ALL}")
+
+def log_debug(msg, exc_info=False):
+    logger.debug(msg, exc_info=exc_info)
+
+
+log_info(f"保存先: {base_dir}")
 
 def resource_path(path):
     if hasattr(sys, "_MEIPASS"):
@@ -35,6 +73,7 @@ shutil.copy(os.path.join(materials_dir, "style.css"), f"{base_dir}/css/style.css
 shutil.copy(os.path.join(materials_dir, "assignment.svg"), f"{base_dir}/img/assignment.svg")
 shutil.copy(os.path.join(materials_dir, "book.svg"), f"{base_dir}/img/book.svg")
 shutil.copy(os.path.join(materials_dir, "user.svg"), f"{base_dir}/img/user.svg")
+
 
 SCOPES = [
     "https://www.googleapis.com/auth/classroom.courses.readonly",
@@ -82,7 +121,6 @@ try:
     root_folder_id = None
 
     if not items:
-        print(f"フォルダ '{folder_name}' は見つかりませんでした。")
         file_metadata = {
             "name": "Classroom Archive",
             "mimeType": "application/vnd.google-apps.folder",
@@ -104,8 +142,17 @@ try:
     archive_folder_id = file.get("id")
     
 except HttpError as error:
-    print(f"An error occurred: {error}")
-    exit(0)
+    log_error(f"An error occurred: {error}")
+    log_error("プログラムを終了します。詳細はログファイルを確認してください。")
+    sys.exit(1)
+
+
+def format_size(size):
+    size = int(size)
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if size < 1024:
+            return f"{size:.2f} {unit}"
+        size /= 1024
 
 
 def list_all(method, key):
@@ -122,6 +169,7 @@ def list_all(method, key):
 
     return items
 
+
 courses = list_all(
     lambda **kwargs: service.courses().list(**kwargs),
     "courses"
@@ -135,9 +183,13 @@ stop_event = threading.Event()
 
 user_profiles = {}
 pictures_to_download = set()
-drive_files_to_download = set()
+all_drive_files_to_download = set()
+all_drive_files_to_copy = set()
+all_files_to_download_size = 0
 file_cache = {}
-files_to_download_size = 0
+
+# 1GBの閾値 (バイト単位)
+THRESHOLD_GB = 1 * 1024 * 1024 * 1024
 
 
 def get_jst_str(iso_str):
@@ -163,12 +215,15 @@ def get_download_file_path(id, name):
     return f"{base_dir}/driveFiles/id_{id}_name_{name}"
 
 # (dict | None) を返す。
+# None の場合はダウンロード・コピー共に不可
 # ダウンロード可能なファイルのみリストに追加し、それ以外はドライブにコピーする。
-def add_drive_file(file_id, file_name):
-    global files_to_download_size
+def fetch_drive_file_details(drive_file):
+    file_name = drive_file["title"]
+    file_id = drive_file["id"]
+
     # 強制終了用
     if stop_event.is_set():
-        print(f"Cancelled: {file_name}")
+        log_warning(f"Cancelled: {file_name}")
         return None
 
     if not hasattr(thread_local, "drive_service"):
@@ -185,7 +240,7 @@ def add_drive_file(file_id, file_name):
     path = get_download_file_path(file_id, file_name)
 
     if os.path.exists(path):
-        print(f"Skip (already exists): {file_name}")
+        log_info(f"Skip (already exists): {file_name}")
         mime_type = mimetypes.guess_file_type(file_name)[0]
         if mime_type:
             drive_extension = mimetypes.guess_extension(mime_type)
@@ -193,7 +248,8 @@ def add_drive_file(file_id, file_name):
         return {
             "file_name": file_name,
             "file_type": file_type,
-            "is_saved": True,
+            "save_type": "download",
+            "size": 0,
         }
     
     if file_id in file_cache:
@@ -203,15 +259,34 @@ def add_drive_file(file_id, file_name):
             # 仮に404ならここでエラーが出る
             file = drive_service.files().get(
                 fileId=file_id,
-                fields="name,mimeType,size,capabilities"
+                fields="name,mimeType,size,capabilities",
+                supportsAllDrives=True,
             ).execute()
             file_cache[file_id] = file
             if not "size" in file:
                 file["size"] = 0
         except HttpError as e:
-            print(f"Failed to get file information; filename: {file_name}; file_id: {file_id};")
-            print(e)
-            return None
+            try:
+                # 課題等で稀にClassroomが返してるIDとDriveの実ファイルIDが別物になっている場合がある
+                m = re.search(r'/d/([a-zA-Z0-9_-]+)', drive_file["alternateLink"])
+                file_id = m.group(1) if m else None
+                if file_id:
+                    file = drive_service.files().get(
+                        fileId=file_id,
+                        fields="name,mimeType,size,capabilities",
+                        supportsAllDrives=True,
+                    ).execute()
+                    file_cache[file_id] = file
+                    if not "size" in file:
+                        file["size"] = 0
+                else:
+                    log_warning(f"ファイル（{file_name}）の情報が取得できなかったためスキップします。ステータスコード: {e.status_code}")
+                    log_debug(f"Failed to get file information; drive_file: {drive_file}; error: {e}", exc_info=True)
+                    return None
+            except HttpError as e:
+                log_warning(f"ファイル（{file_name}）の情報が取得できなかったためスキップします。ステータスコード: {e.status_code}")
+                log_debug(f"Failed to get file information; drive_file: {drive_file}; error: {e}", exc_info=True)
+                return None
         
     mime_type = file["mimeType"]
     size = int(file["size"])
@@ -229,50 +304,39 @@ def add_drive_file(file_id, file_name):
         file_name += drive_extension
 
     if mime_type == "application/vnd.google-apps.folder":
-        print(f"フォルダはダウンロードできません。ファイル名: {file_name}")
+        log_info(f"フォルダはダウンロード・コピーできません。フォルダ名: {file_name}, リンク: {drive_file['alternateLink']}")
         return None
 
     elif mime_type.startswith("application/vnd.google-apps.") and file["capabilities"]["canCopy"]:
-        copied_file = drive_service.files().copy(
-            fileId=file_id,
-            body={
-                "name": file_name,
-                "parents": [archive_folder_id] # Apps Script (.gs) は親フォルダ指定無視でドライブ直下に保存される
-            },
-            fields="id,name,webViewLink,mimeType"
-        ).execute()
-        print(f"ダウンロードできないファイル形式のため、マイドライブにコピーが作成されました。ファイル名: {copied_file["name"]}, リンク: {copied_file['webViewLink']}")
-
         return {
             "file_name": file_name,
             "file_type": file_type,
-            "is_saved": False,
-            "web_view_link": copied_file["webViewLink"],
+            "save_type": "copy",
+            "size": 0,
         }
     
     elif file["capabilities"]["canDownload"]:
-        drive_files_to_download.add((file_id, file_name))
-        files_to_download_size += size
-
         return {
             "file_name": file_name,
             "file_type": file_type,
-            "is_saved": True,
+            "save_type": "download",
+            "size": size,
         }
     else:
         if not file["capabilities"]["canDownload"]:
-            print(f"ファイルのダウンロードが許可されていません。ファイル名: {file_name}; ファイルID: {file_id};")
+            log_info(f"ファイルのダウンロードが許可されていません。ファイル名: {file_name}, リンク: {drive_file['alternateLink']}")
         elif not file["capabilities"]["canCopy"]:
-            print(f"ファイルのコピーが許可されていません。ファイル名: {file_name}; ファイルID: {file_id};")
+            log_info(f"ファイルのコピーが許可されていません。ファイル名: {file_name}, リンク: {drive_file['alternateLink']}")
         else:
-            print(f"ファイルがダウンロードできません。ファイル名: {file_name}; ファイルID: {file_id};")
+            log_info(f"ダウンロード・コピー両方できないファイル形式です。ファイル名: {file_name}, リンク: {drive_file['alternateLink']}")
+            log_debug(f"Failed to get file information; drive_file: {drive_file};", exc_info=True)
         return None
 
 
 def download_file(url, path):
     # 強制終了用
     if stop_event.is_set():
-        print(f"Cancelled: {path}")
+        log_warning(f"Cancelled: {path}")
         return 
     
     r = requests.get(url, )
@@ -280,14 +344,14 @@ def download_file(url, path):
         with open(path, "wb") as f:
             f.write(r.content)
     else:
-        print(f"Failed to save {path}.png; status_code: {r.status_code};")
+        log_warning(f"Failed to save {path}.png; status_code: {r.status_code};")
 
 
 # Google ファイル以外のダウンロード
 def download_drive_file(file_id, file_name):
     # 強制終了用
     if stop_event.is_set():
-        print(f"Cancelled: {file_name}")
+        log_warning(f"Cancelled: {file_name}")
         return None
 
     if not hasattr(thread_local, "drive_service"):
@@ -305,21 +369,49 @@ def download_drive_file(file_id, file_name):
         done = False
         while not done:
             status, done = downloader.next_chunk()
-            # print(f"filename: {file_name}; file_id: {file_id}; progress: {int(status.progress() * 100)}%; done: {done}")
+            # log_info(f"filename: {file_name}; file_id: {file_id}; progress: {int(status.progress() * 100)}%; done: {done}")
     except HttpError as error:
-        print(f"Failed to download file; filename: {file_name}; file_id: {file_id};")
-        print(error)
+        log_warning(f"Failed to download file; filename: {file_name}; file_id: {file_id}; error: {error}")
         done = True
 
+
+def copy_drive_file(file_id, file_name):
+    # 強制終了用
+    if stop_event.is_set():
+        log_warning(f"Cancelled: {file_name}")
+        return None
+
+    if not hasattr(thread_local, "drive_service"):
+        thread_local.drive_service = build("drive", "v3", credentials=creds)
+
+    drive_service = thread_local.drive_service
+
+    try:
+        copied_file = drive_service.files().copy(
+            fileId=file_id,
+            body={
+                "name": file_name,
+                "parents": [archive_folder_id] # Apps Script (.gs) は親フォルダ指定無視でドライブ直下に保存される
+            },
+            fields="id,name,webViewLink,mimeType"
+        ).execute()
+        log_info(f"ダウンロードできないファイル形式のため、マイドライブにコピーが作成されました。ファイル名: {copied_file["name"]}, リンク: {copied_file['webViewLink']}")
+    except HttpError as error:
+        log_warning(f"Failed to copy file; filename: {file_name}; file_id: {file_id}; error: {error}")
+        done = True
+
+courses_to_archive = []
 
 # コース別の処理
 for course in courses:
     # 強制終了用
     if stop_event.is_set():
-        print(f"Cancelled: {course}")
+        log_warning(f"Cancelled: {course}")
         exit()
-
-    print(f"クラス名: {course["name"]}")
+    
+    drive_files_to_copy = set()
+    drive_files_to_download = set()
+    files_to_download_size = 0
 
     announcements = list_all(
         lambda **kwargs: service.courses().announcements().list(courseId=course["id"], **kwargs),
@@ -355,18 +447,6 @@ for course in courses:
         "studentSubmissions"
     )
 
-    for user in list(teachers + students):
-        if user["userId"] in user_profiles:
-            continue
-        profile = user["profile"]
-        user_profiles[user["userId"]] = profile
-        if "photoUrl" in profile:
-            path = f"{base_dir}/img/icons/{profile["id"]}.png"
-            if os.path.exists(path):
-                print(f"Skip (already exists): {path};")
-            else:
-                pictures_to_download.add((f"https:{profile["photoUrl"]}", path))
-
     # 授業のトピック
     topic_map = {
         topic["topicId"]: topic
@@ -379,7 +459,10 @@ for course in courses:
         for s in submissions
     }
 
+    # CourseWork の個別提出物・返却物の取得
     def get_course_work_attachments(course_work):
+        global files_to_download_size, drive_files_to_copy, drive_files_to_download
+
         submission = submission_map.get(course_work["id"])
         if not submission:
             return
@@ -399,16 +482,22 @@ for course in courses:
                 drive_file = attachment["driveFile"]["driveFile"]
                 if "title" in drive_file:
                     drive_file = attachment["driveFile"]["driveFile"]
-                    file_dict = add_drive_file(drive_file["id"], drive_file["title"])
-                    if file_dict:
-                        drive_file["title"] = file_dict["file_name"] # 拡張子補完等のため必要
-                        drive_file["file_type"] = file_dict["file_type"]
-                        drive_file["is_saved"] = file_dict["is_saved"]
-                        if "web_view_link" in file_dict:
-                            drive_file["web_view_link"] = file_dict["web_view_link"]
+                    file_detail = fetch_drive_file_details(drive_file)
+                    if file_detail:
+                        drive_file["title"] = file_detail["file_name"] # 拡張子補完等のため必要
+                        drive_file["file_type"] = file_detail["file_type"]
+                        drive_file["save_type"] = file_detail["save_type"]
+                        drive_file["size"] = file_detail["size"]
+                        files_to_download_size += file_detail["size"]
+                        if drive_file["save_type"] == "copy":
+                            drive_files_to_copy.add((drive_file["id"], drive_file["title"]))
+                        elif drive_file["save_type"] == "download":
+                            drive_files_to_download.add((drive_file["id"], drive_file["title"]))
+                        else:
+                            log_warning(f"Unsupported save type. DriveFile: {drive_file}")
 
-
-    def get_all_materials(item):
+    # 投稿のObjectにフィールドを追加する
+    def clean_item(item):
         if item["creatorUserId"] in user_profiles:
             item["creatorUserProfile"] = user_profiles[item["creatorUserId"]]
         else:
@@ -422,25 +511,33 @@ for course in courses:
                 },
                 "photoUrl": None,
             }
-
         item["creationTime"] = get_jst_str(item["creationTime"])
         item["updateTime"] = get_jst_str(item["updateTime"])
         item["was_updated"] = item["creationTime"] != item["updateTime"]
         if "topicId" in item:
             item["topicName"] = topic_map[item["topicId"]]["name"]
 
+    # 投稿の添付資料の取得
+    def get_all_materials(item):
+        global files_to_download_size, drive_files_to_copy, drive_files_to_download
+
         if "materials" in item:
             for material in item["materials"]:
                 if "driveFile" in material and "title" in material["driveFile"]["driveFile"]:
                     drive_file = material["driveFile"]["driveFile"]
-                    file_dict = add_drive_file(drive_file["id"], drive_file["title"])
-                    if file_dict:
-                        drive_file["title"] = file_dict["file_name"] # 拡張子補完等のため必要
-                        drive_file["file_type"] = file_dict["file_type"]
-                        drive_file["is_saved"] = file_dict["is_saved"]
-                        if "web_view_link" in file_dict:
-                            drive_file["web_view_link"] = file_dict["web_view_link"]
-
+                    file_detail = fetch_drive_file_details(drive_file)
+                    if file_detail:
+                        drive_file["title"] = file_detail["file_name"] # 拡張子補完等のため必要
+                        drive_file["file_type"] = file_detail["file_type"]
+                        drive_file["save_type"] = file_detail["save_type"]
+                        drive_file["size"] = file_detail["size"]
+                        files_to_download_size += file_detail["size"]
+                        if drive_file["save_type"] == "copy":
+                            drive_files_to_copy.add((drive_file["id"], drive_file["title"]))
+                        elif drive_file["save_type"] == "download":
+                            drive_files_to_download.add((drive_file["id"], drive_file["title"]))
+                        else:
+                            log_warning(f"Unsupported save type. DriveFile: {drive_file}")
 
     for item in announcements:
         item["item_type"] = "Announcement"
@@ -459,14 +556,52 @@ for course in courses:
             # 先に全タスクをsubmitし、futureオブジェクトをリスト化する
             futures = [executor.submit(get_course_work_attachments, item) for item in course_works]
             futures += [executor.submit(get_all_materials, item) for item in all_items]
+            futures += [executor.submit(clean_item, item) for item in all_items]
             
             # as_completedで終わったものから取り出し、tqdmでラップする
             results = []
-            for future in tqdm(as_completed(futures), total=len(futures), desc=f"{course["name"]}のファイルを整理中"):
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"{course["name"]}の情報を取得中"):
                 results.append(future.result())
 
     except KeyboardInterrupt:
         stop_event.set()
+
+    log_info("\n==============================")
+    log_info(f"クラス名: {course["name"]}")
+    log_info(f"投稿（お知らせ・課題・資料）の合計数: {len(all_items)}")
+    log_info(f"ドライブへコピー対象のファイル数: {len(drive_files_to_copy)}")
+    log_info(f"ダウンロード対象ファイルの数: {len(drive_files_to_download)}")
+    log_info(f"合計サイズ（ダウンロード対象のみ）: {format_size(files_to_download_size)}")
+    log_info("==============================\n")
+
+    if files_to_download_size > THRESHOLD_GB:
+        log_warning(f"注意: ダウンロード対象ファイルの合計サイズが1GBを超えています ({format_size(files_to_download_size)})")
+        confirm = input("このクラスをアーカイブ対象に含めますか？ (y/N): ").strip().lower()
+        if confirm != "y":
+            log_info(f"クラス「{course["name"]}」をアーカイブ対象から除外します。")
+            continue
+        else:
+            log_info(f"クラス「{course["name"]}」をアーカイブ対象に登録します。")
+            courses_to_archive.append(course)
+    else:
+        log_info("ダウンロード対象ファイルの合計サイズが1GB未満のため、自動的にアーカイブ対象に登録します。")
+        courses_to_archive.append(course)
+    
+    for user in list(teachers + students):
+        if user["userId"] in user_profiles:
+            continue
+        profile = user["profile"]
+        user_profiles[user["userId"]] = profile
+        if "photoUrl" in profile:
+            path = f"{base_dir}/img/icons/{profile["id"]}.png"
+            if os.path.exists(path):
+                log_info(f"Skip (already exists): {path};")
+            else:
+                pictures_to_download.add((f"https:{profile["photoUrl"]}", path))
+
+    all_drive_files_to_copy |= drive_files_to_copy
+    all_drive_files_to_download |= drive_files_to_download
+    all_files_to_download_size += files_to_download_size
 
     html = template.render(
         course=course,
@@ -482,29 +617,29 @@ for course in courses:
     with open(f"{base_dir}/クラス_{course["name"]}.html", "w", encoding="utf-8") as f:
         f.write(html)
 
+log_info("アーカイブ対象のクラスが確定しました。")
 
-def format_size(size):
-    size = int(size)
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if size < 1024:
-            return f"{size:.2f} {unit}"
-        size /= 1024
+log_info("\n==============================")
+log_info("アーカイブ対象のクラス: ")
+for course in courses_to_archive:
+    log_info(f"- {course["name"]}")
+log_info(f"計 {len(courses_to_archive)} クラス")
+log_info(f"ドライブへコピー対象のファイルの合計数: {len(all_drive_files_to_copy)}")
+log_info(f"ダウンロード対象ファイルの合計数: {len(all_drive_files_to_download)}")
+log_info(f"ダウンロード対象ファイルの合計容量: {format_size(all_files_to_download_size)}")
+log_info("==============================")
 
-print("\n==============================")
-print(f"ダウンロード予定ファイル数: {len(drive_files_to_download)}")
-print(f"合計容量: {format_size(files_to_download_size)}")
-print("==============================")
-
-confirm = input("ダウンロードを開始しますか？ (y/N): ").strip().lower()
+confirm = input("ファイルのダウンロードを開始しますか？ (y/N): ").strip().lower()
 
 if confirm != "y":
-    print("処理を中止しました。")
-    exit()
+    log_warning("処理を中止しました。")
+    sys.exit(1)
 
 
 try:
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [executor.submit(download_file, picture[0], picture[1]) for picture in pictures_to_download]
+        futures += [executor.submit(copy_drive_file, file[0], file[1]) for file in drive_files_to_copy]
         futures += [executor.submit(download_drive_file, file[0], file[1]) for file in drive_files_to_download]
         
         results = []
@@ -514,4 +649,4 @@ try:
 except KeyboardInterrupt:
     stop_event.set()
 
-print(f"完了しました。アーカイブは {base_dir} に出力されています。")
+log_info(f"完了しました。アーカイブは {base_dir} に出力されています。")
