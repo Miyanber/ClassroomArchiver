@@ -192,6 +192,7 @@ course_folders = {}
 
 # 1GBの閾値 (バイト単位)
 THRESHOLD_GB = 1 * 1024 * 1024 * 1024
+THRESHOLD_100MB = 100 * 1024 * 1024
 
 
 def get_jst_str(iso_str):
@@ -518,6 +519,8 @@ for course in courses:
     drive_folders_to_copy = set()
     icons_to_download = set()
     files_to_download_size = 0
+    large_drive_files = set()
+    large_drive_files_size = 0
 
     def fetch_course_data(course_id):
         # API呼び出しの定義をリスト化
@@ -533,17 +536,20 @@ for course in courses:
 
         results = {}
         # 7本のリクエストを並列実行
-        with ThreadPoolExecutor(max_workers=1) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor: # 適切なスレッド数に調整
             future_to_key = {executor.submit(func): key for key, func in tasks.items()}
-            for future in future_to_key:
+            
+            for future in tqdm(as_completed(future_to_key), total=len(future_to_key), desc=f"{course["name"]}の情報を取得中(1)"):
+                
+                # futureに対応する元のkeyを取得
                 key = future_to_key[future]
+                
                 try:
                     results[key] = future.result()
                 except Exception as e:
                     log_error(f"{key} の取得に失敗しました。詳細はログに記載しています。")
                     log_debug(e, exc_info=True)
-                    results[key] = [] # 失敗時は空リスト
-                    
+                    results[key] = []  # 失敗時は空リストで埋める
         return results
 
     data = fetch_course_data(course["id"])
@@ -579,6 +585,27 @@ for course in courses:
         for s in submissions
     }
 
+    def clean_drive_file(drive_file):
+        global large_drive_files_size, files_to_download_size
+        file_detail = fetch_drive_file_details(drive_file)
+        if file_detail:
+            drive_file["title"] = file_detail["file_name"] # 拡張子補完等のため必要
+            drive_file["file_type"] = file_detail["file_type"]
+            drive_file["save_type"] = file_detail["save_type"]
+            drive_file["size"] = file_detail["size"]
+            files_to_download_size += file_detail["size"]
+            if drive_file["save_type"] == "copy":
+                drive_files_to_copy.add((course_folder_id, drive_file["id"], drive_file["title"]))
+            elif drive_file["save_type"] == "copy (folder)":
+                drive_folders_to_copy.add((course_folder_id, drive_file["id"], drive_file["title"]))
+            elif drive_file["save_type"] == "download":
+                drive_files_to_download.add((drive_file["id"], drive_file["title"]))
+                if drive_file["size"] > THRESHOLD_100MB:
+                    large_drive_files.add((drive_file["id"], drive_file["title"]))
+                    large_drive_files_size += drive_file["size"]
+            else:
+                log_warning(f"Unsupported save type. DriveFile: {drive_file}")
+
     # CourseWork の個別提出物・返却物の取得
     def get_course_work_attachments(course_work):
         global files_to_download_size, drive_files_to_copy, drive_files_to_download
@@ -602,21 +629,7 @@ for course in courses:
                 drive_file = attachment["driveFile"]["driveFile"]
                 if "title" in drive_file:
                     drive_file = attachment["driveFile"]["driveFile"]
-                    file_detail = fetch_drive_file_details(drive_file)
-                    if file_detail:
-                        drive_file["title"] = file_detail["file_name"] # 拡張子補完等のため必要
-                        drive_file["file_type"] = file_detail["file_type"]
-                        drive_file["save_type"] = file_detail["save_type"]
-                        drive_file["size"] = file_detail["size"]
-                        files_to_download_size += file_detail["size"]
-                        if drive_file["save_type"] == "copy":
-                            drive_files_to_copy.add((course_folder_id, drive_file["id"], drive_file["title"]))
-                        elif drive_file["save_type"] == "copy (folder)":
-                            drive_folders_to_copy.add((course_folder_id, drive_file["id"], drive_file["title"]))
-                        elif drive_file["save_type"] == "download":
-                            drive_files_to_download.add((drive_file["id"], drive_file["title"]))
-                        else:
-                            log_warning(f"Unsupported save type. DriveFile: {drive_file}")
+                    clean_drive_file(drive_file)
 
     # 投稿のObjectにフィールドを追加する
     def clean_item(item):
@@ -647,21 +660,7 @@ for course in courses:
             for material in item["materials"]:
                 if "driveFile" in material and "title" in material["driveFile"]["driveFile"]:
                     drive_file = material["driveFile"]["driveFile"]
-                    file_detail = fetch_drive_file_details(drive_file)
-                    if file_detail:
-                        drive_file["title"] = file_detail["file_name"] # 拡張子補完等のため必要
-                        drive_file["file_type"] = file_detail["file_type"]
-                        drive_file["save_type"] = file_detail["save_type"]
-                        drive_file["size"] = file_detail["size"]
-                        files_to_download_size += file_detail["size"]
-                        if drive_file["save_type"] == "copy":
-                            drive_files_to_copy.add((course_folder_id, drive_file["id"], drive_file["title"]))
-                        elif drive_file["save_type"] == "copy (folder)":
-                            drive_folders_to_copy.add((course_folder_id, drive_file["id"], drive_file["title"]))
-                        elif drive_file["save_type"] == "download":
-                            drive_files_to_download.add((drive_file["id"], drive_file["title"]))
-                        else:
-                            log_warning(f"Unsupported save type. DriveFile: {drive_file}")
+                    clean_drive_file(drive_file)
 
     def folders_to_files(folders):
         global drive_files_to_copy
@@ -690,7 +689,7 @@ for course in courses:
             
             # as_completedで終わったものから取り出し、tqdmでラップする
             results = []
-            for future in tqdm(as_completed(futures), total=len(futures), desc=f"{course["name"]}の情報を取得中"):
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"{course["name"]}の情報を取得中(2)"):
                 results.append(future.result())
 
     except KeyboardInterrupt:
@@ -707,13 +706,35 @@ for course in courses:
 
     if files_to_download_size > THRESHOLD_GB:
         log_warning(f"注意: ダウンロード対象ファイルの合計サイズが1GBを超えています ({format_size(files_to_download_size)})")
-        confirm = input("このクラスをアーカイブ対象に含めますか？ (y/N): ").strip().lower()
-        if confirm != "y":
+        log_info(f"100MBを超えているファイル:")
+        for item in large_drive_files:
+            log_info(f"- {item[1]}")
+        log_info(f"100MBを超えているファイルの合計サイズ: {format_size(large_drive_files_size)}")
+
+        print("\nオプションを選んでください:")
+        print(f"[1] 全てダウンロード ({format_size(files_to_download_size)})")
+        print(f"[2] 100MB以上のファイルを除外してダウンロード ({format_size(files_to_download_size - large_drive_files_size)})")
+        print("[3] このクラスをアーカイブ対象から除外する")
+
+        def choice_input():
+            while True:
+                choice = input("選択 (1/2/3): ").strip()
+                if choice in ["1", "2", "3"]:
+                    return choice
+                else:
+                    print("1,2,3のいずれかを入力してください。")
+
+        choice = choice_input()
+
+        if choice == '1':
+            log_info(f"ダウンロード対象ファイルを全てダウンロードします。")
+        elif choice == '2':
+            log_info(f"100MB以上のファイルをダウンロード対象から除外します。")
+            files_to_download_size -= large_drive_files_size
+            drive_files_to_download -= large_drive_files
+        elif choice == '3':
             log_info(f"クラス「{course["name"]}」をアーカイブ対象から除外します。")
             continue
-        else:
-            log_info(f"クラス「{course["name"]}」をアーカイブ対象に登録します。")
-            courses_to_archive.append(course)
     else:
         log_info("ダウンロード対象ファイルの合計サイズが1GB未満のため、自動的にアーカイブ対象に登録します。")
         courses_to_archive.append(course)
