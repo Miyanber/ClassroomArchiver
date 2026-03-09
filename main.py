@@ -289,7 +289,16 @@ def fetch_drive_file_details(drive_file):
     path = get_download_file_path(file_id, file_name)
     if os.path.exists(path):
         log_info(f"Skip (already exists): {file_name}")
-        return None
+        mime_type = mimetypes.guess_file_type(file_name)[0]
+        if mime_type:
+            extension = mimetypes.guess_extension(mime_type)
+            file_type = extension.upper()[1:]
+        return {
+            "file_name": file_name,
+            "file_type": file_type,
+            "save_type": "download (skipped)",
+            "size": 0,
+        }
     
     if file_id in file_cache:
         file = file_cache[file_id]
@@ -344,7 +353,12 @@ def fetch_drive_file_details(drive_file):
     path = get_download_file_path(file_id, file_name)
     if os.path.exists(path):
         log_info(f"Skip (already exists): {file_name}")
-        return None
+        return {
+            "file_name": file_name,
+            "file_type": file_type,
+            "save_type": "download (skipped)",
+            "size": 0,
+        }
 
     if mime_type == "application/vnd.google-apps.folder":
         return {
@@ -644,6 +658,8 @@ for course in courses:
                 if drive_file["size"] > THRESHOLD_100MB:
                     large_drive_files.add((drive_file["id"], drive_file["title"]))
                     large_drive_files_size += drive_file["size"]
+            elif drive_file["save_type"] == "download (skipped)":
+                pass
             else:
                 log_warning(f"Unsupported save type. DriveFile: {drive_file}")
 
