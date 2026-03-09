@@ -21,18 +21,22 @@ while True:
         jst_today = datetime.now().astimezone(timezone(timedelta(hours=9)))
         jst_today_str = jst_today.strftime("%Y%m%d%H%M%S")
         archive_date = jst_today_str
+        base_dir = f"classroomArchive/{archive_date}"
         break
     elif result.isdigit() and len(result) == 14:
         archive_date = result
-        print(f"過去のアーカイブを上書きします。アーカイブの日時: {archive_date}")
-        break
+        base_dir = f"classroomArchive/{archive_date}"
+        if os.path.exists(base_dir):
+            print(f"過去のアーカイブを上書きします。アーカイブの日時: {archive_date}")
+            break
+        else:
+            print(f"アーカイブが存在しません。アーカイブの日時: {archive_date}")
+            print("アーカイブの日時が正しく入力されているか確認してください。")
     else:
         print("無効な入力です。")
 
 
 signal.signal(signal.SIGINT, lambda sig, frame: stop_event.set())
-
-base_dir = f"classroomArchive/{archive_date}"
 
 # ロギングの設定
 import logging
@@ -280,21 +284,12 @@ def fetch_drive_file_details(drive_file):
     file_name = file_name.rstrip(" .")
 
     file_type = None
-    path = get_download_file_path(file_id, file_name)
 
     # ファイル情報を取得する前の確認
+    path = get_download_file_path(file_id, file_name)
     if os.path.exists(path):
         log_info(f"Skip (already exists): {file_name}")
-        mime_type = mimetypes.guess_file_type(file_name)[0]
-        if mime_type:
-            drive_extension = mimetypes.guess_extension(mime_type)
-            file_type = drive_extension.upper()[1:]
-        return {
-            "file_name": file_name,
-            "file_type": file_type,
-            "save_type": "download",
-            "size": 0,
-        }
+        return None
     
     if file_id in file_cache:
         file = file_cache[file_id]
@@ -346,14 +341,10 @@ def fetch_drive_file_details(drive_file):
         file_name += drive_extension
 
     # ファイル情報を取得して拡張子を補完した後にもう一度確認
+    path = get_download_file_path(file_id, file_name)
     if os.path.exists(path):
         log_info(f"Skip (already exists): {file_name}")
-        return {
-            "file_name": file_name,
-            "file_type": file_type,
-            "save_type": "download",
-            "size": 0,
-        }
+        return None
 
     if mime_type == "application/vnd.google-apps.folder":
         return {
