@@ -14,11 +14,15 @@ from pathlib import Path
 
 signal.signal(signal.SIGINT, lambda sig, frame: stop_event.set())
 
+# 引数に過去の日付(YYYYMMDDHHMMSS)を指定できる
+if len(sys.argv) > 1:
+    archive_date = sys.argv[1]
+else:
+    jst_today = datetime.now().astimezone(timezone(timedelta(hours=9)))
+    jst_today_str = jst_today.strftime("%Y%m%d%H%M%S")
+    archive_date = jst_today_str
 
-jst_today = datetime.now().astimezone(timezone(timedelta(hours=9)))
-jst_today_str = jst_today.strftime("%Y%m%d%H%M%S")
-
-base_dir = f"classroomArchive/archive_{jst_today_str}"
+base_dir = f"classroomArchive/archive_{archive_date}"
 
 # ロギングの設定
 import logging
@@ -29,7 +33,7 @@ init(autoreset=True)
 
 log_dir = os.path.join(base_dir, "logs")
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, f"archive_{jst_today_str}.log")
+log_file = os.path.join(log_dir, f"archive_{archive_date}.log")
 
 logger = logging.getLogger("ClassroomArchiver")
 logger.setLevel(logging.DEBUG)
@@ -94,6 +98,27 @@ flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
 creds = flow.run_local_server(port=0)
 service = build("classroom", "v1", credentials=creds)
 
+# API レート制限対応
+def execute_with_retry(api_request, max_retries=5):
+    """
+    APIリクエストを実行し、レート制限時に指数バックオフでリトライする汎用関数
+    :param api_request: service.files().copy(...) などの実行前のリクエストオブジェクト
+    """
+    for n in range(max_retries):
+        try:
+            return api_request.execute()
+        
+        except HttpError as error:
+            # 403 (Rate Limit) や 429 (Too Many Requests) を判定
+            if error.resp.status in [403, 429]:
+                wait_time = (2 ** n)  # 指数バックオフ
+                print(f"レート制限(status:{error.resp.status})が発生。{wait_time}秒待機して再試行します...")
+                time.sleep(wait_time)
+            else:
+                raise error
+                
+    raise Exception("最大再試行回数を超えてもAPI実行制限が解除されませんでした。")
+
 env = Environment(loader=FileSystemLoader(materials_dir))
 template = env.get_template("course.html")
 
@@ -111,13 +136,13 @@ try:
         f"and trashed = false"
     )
 
-    results = drive_service.files().list(
+    results = execute_with_retry(drive_service.files().list(
         q=query,
         spaces='drive',
         fields='files(id, name)', # 必要なフィールドだけ取得
         pageSize=10,
         supportsAllDrives=True,
-    ).execute()
+    ))
     
     items = results.get('files', [])
     root_folder_id = None
@@ -127,7 +152,7 @@ try:
             "name": "Classroom Archive",
             "mimeType": "application/vnd.google-apps.folder",
         }
-        file = drive_service.files().create(body=file_metadata, fields="id", supportsAllDrives=True,).execute()
+        file = execute_with_retry(drive_service.files().create(body=file_metadata, fields="id", supportsAllDrives=True,))
         root_folder_id = file.get("id")
     else:
         # 複数ヒットする可能性があるため、最初の一つを返す
@@ -136,11 +161,11 @@ try:
 
     # 個別フォルダ作成
     file_metadata = {
-        "name": jst_today_str,
+        "name": archive_date,
         "mimeType": "application/vnd.google-apps.folder",
         "parents": [root_folder_id],
     }
-    file = drive_service.files().create(body=file_metadata, fields="id", supportsAllDrives=True, ).execute()
+    file = execute_with_retry(drive_service.files().create(body=file_metadata, fields="id", supportsAllDrives=True, ))
     archive_folder_id = file.get("id")
     
 except HttpError as error:
@@ -162,7 +187,7 @@ def list_all(method, key):
     page_token = None
     
     while True:
-        result = method(pageToken=page_token).execute()
+        result = execute_with_retry(method(pageToken=page_token))
         items.extend(result.get(key, []))
         page_token = result.get("nextPageToken")
 
@@ -262,11 +287,11 @@ def fetch_drive_file_details(drive_file):
     else:
         try:
             # 仮に404ならここでエラーが出る
-            file = drive_service.files().get(
+            file = execute_with_retry(drive_service.files().get(
                 fileId=file_id,
                 fields="name,mimeType,size,capabilities",
                 supportsAllDrives=True,
-            ).execute()
+            ))
             file_cache[file_id] = file
             if not "size" in file:
                 file["size"] = 0
@@ -276,11 +301,11 @@ def fetch_drive_file_details(drive_file):
                 m = re.search(r'/d/([a-zA-Z0-9_-]+)', drive_file["alternateLink"])
                 file_id = m.group(1) if m else None
                 if file_id:
-                    file = drive_service.files().get(
+                    file = execute_with_retry(drive_service.files().get(
                         fileId=file_id,
                         fields="name,mimeType,size,capabilities",
                         supportsAllDrives=True,
-                    ).execute()
+                    ))
                     file_cache[file_id] = file
                     if not "size" in file:
                         file["size"] = 0
@@ -395,15 +420,15 @@ def copy_drive_file(course_folder_id, file_id, file_name):
     drive_service = thread_local.drive_service
 
     try:
-        copied_file = drive_service.files().copy(
+        copied_file = execute_with_retry(drive_service.files().copy(
             fileId=file_id,
             body={
                 "name": file_name,
                 "parents": [course_folder_id] # Apps Script (.gs) は親フォルダ指定無視でドライブ直下に保存される
             },
             fields="id,name,webViewLink,mimeType",
-            supportsAllDrives=True,
-        ).execute()
+           supportsAllDrives=True,
+        ))
         log_debug(f"Copied file: {copied_file}")
     except HttpError as error:
         log_warning(f"ファイル（{file_name}）をコピーできませんでした。ファイルID: {file_id}, ステータスコード: {error.status_code}")
@@ -429,11 +454,11 @@ def fetch_drive_folder_details_recursive(parent_folder_id, source_folder_id, sou
     }
     
     try:
-        new_folder = drive_service.files().create(
+        new_folder = execute_with_retry(drive_service.files().create(
             body=new_folder_metadata, 
             fields='id',
             supportsAllDrives=True
-        ).execute()
+        ))
         new_folder_id = new_folder.get('id')
     except Exception as e:
         log_error(f"フォルダ作成に失敗しました: {source_folder_name}")
@@ -446,14 +471,14 @@ def fetch_drive_folder_details_recursive(parent_folder_id, source_folder_id, sou
     
     while True:
         try:
-            response = drive_service.files().list(
+            response = execute_with_retry(drive_service.files().list(
                 q=query,
                 spaces='drive',
                 fields='nextPageToken, files(id, name, mimeType)',
                 pageToken=page_token,
                 supportsAllDrives=True,
                 includeItemsFromAllDrives=True
-            ).execute()
+            ))
             items.extend(response.get('files', []))
             page_token = response.get('nextPageToken')
             if not page_token:
@@ -493,6 +518,9 @@ for course in courses:
     
     log_debug(f"Course: {course}")
 
+    if course["name"] != "高３物理（袴田先生）":
+        continue
+
     # クラス用フォルダをドライブに作成
     folder_metadata = {
         'name': course["name"],
@@ -500,11 +528,11 @@ for course in courses:
         'parents': [archive_folder_id]
     }
     try:
-        course_folder = drive_service.files().create(
+        course_folder = execute_with_retry(drive_service.files().create(
             body=folder_metadata, 
             fields='id',
             supportsAllDrives=True
-        ).execute()
+        ))
         course_folder_id = course_folder.get('id')
         course_folders[course["id"]] = {
             "folder_id": course_folder_id,
