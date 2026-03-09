@@ -3,29 +3,33 @@ Export your Google Classroom into a browsable HTML archive.
 
 ## 説明
 
-- 所属するクラスのお知らせ・課題・資料が、HTML形式（Webサイト形式）で PC 内にダウンロードされます。
-- 投稿に添付された共有ファイルもダウンロードされます。
+- Python スクリプトです。`python main.py` で実行できます。
+- Google Classroom™ で所属するクラスのお知らせ・課題・資料を HTML 形式でアーカイブすることができます。
+- ここでは、「ドライブへのコピー」と「ローカルへのダウンロード」をまとめて「アーカイブ」と呼びます。
 
-## 利用方法
+## 利用方法 (開発者向け)
 
-1. main.exe をダウンロードする
-2. 適当な場所に main.exe を配置し、main.exe を実行する
-3. ダウンロードされるデータ量が表示されるので、問題ないことを確認して、y を入力し Enter
-   - y は yes, N は no を意味する
-4. 気長に待つ
-5. データが main.exe と同じ階層にある `classroomArchive` フォルダに保存される。
+1. リポジトリをクローンする
+2. Google Cloud でプロジェクトを作成する
+3. Google Classroom API と Google Drive API を有効にする
+4. OAuth 認証情報を作成する
+5. credentials.json をリポジトリ直下に作成し配置する
+6. main.py を実行する
+7. コンソールの内容に従って操作する
+8. アーカイブが開始される
+9. アーカイブが完了する
 
 ## 注意事項
 
 ### データの保存先
 
-PC 内のデータは `classroomArchive/YYYYMMDDHHMMSS` というフォルダに保存されます。<br>
-`YYYYMMDDHHMMSS` は年月日時を表しており、例えば、2026年3月6日19時34分08秒に実行した場合、`classroomArchive/20260306193408` というフォルダに保存されます。
+PC 内のデータは、実行元と同じディレクトリからの相対パスで `classroomArchive/YYYYMMDDHHMMSS` に保存されます。<br>
+`YYYYMMDDHHMMSS` は年月日時を表しており、例えば、2026年3月6日19時34分08秒に実行した場合、`classroomArchive/20260306193408` というフォルダに保存されます。　　
+フォルダ内にはクラスごとに HTML ファイルが生成されています。ファイル内のリンクは、ローカルにダウンロードされたものに置き換わっています。ダウンロードされていないものに関しては引き続きドライブへのリンクとなっています。
 
 ### 保存されないファイル
 
 - Google Forms
-- 共有されたフォルダ
 - 閲覧権限がないファイル
 - 存在しないファイル
 - 投稿に対するコメント
@@ -39,8 +43,6 @@ PC 内のデータは `classroomArchive/YYYYMMDDHHMMSS` というフォルダに
 - Google Docs ファイル
 - Google Slides ファイル
 - Google Sheets ファイル
+- ドライブフォルダ内のファイル
 
-上記の内容は保存されませんが、代わりに削除予定の Google アカウントの `マイドライブ/Classroom Archive/YYYYMMDDHHMMSS` 内に、ファイルのコピーが作成されます。
-HTML ファイル内でのリンク先は、コピーされたファイルのリンクになっています。<br>
-※ **マイドライブはアカウント停止と同時にアクセスできなくなります。** 削除予定の Google アカウントを他の個人アカウントに移行する際、Google Drive の内容をコピーすることを忘れないようにして下さい。
-
+上記の内容はローカルには保存されませんが、OAuth 認証を行った Google アカウントの `マイドライブ/Classroom Archive/YYYYMMDDHHMMSS` 内に、ファイルのコピーが作成されます。
