@@ -282,6 +282,7 @@ def fetch_drive_file_details(drive_file):
     file_type = None
     path = get_download_file_path(file_id, file_name)
 
+    # ファイル情報を取得する前の確認
     if os.path.exists(path):
         log_info(f"Skip (already exists): {file_name}")
         mime_type = mimetypes.guess_file_type(file_name)[0]
@@ -343,6 +344,16 @@ def fetch_drive_file_details(drive_file):
     # 拡張子が必要な場合は付与
     if drive_extension and not file_name.lower().endswith(drive_extension.lower()) and not mime_type.startswith("application/vnd.google-apps"):
         file_name += drive_extension
+
+    # ファイル情報を取得して拡張子を補完した後にもう一度確認
+    if os.path.exists(path):
+        log_info(f"Skip (already exists): {file_name}")
+        return {
+            "file_name": file_name,
+            "file_type": file_type,
+            "save_type": "download",
+            "size": 0,
+        }
 
     if mime_type == "application/vnd.google-apps.folder":
         return {
@@ -608,7 +619,7 @@ for course in courses:
         if "photoUrl" in profile:
             path = f"{base_dir}/img/icons/{profile["id"]}.png"
             if os.path.exists(path):
-                log_info(f"Skip (already exists): {path};")
+                log_info(f"Skip (already exists): {Path(path).resolve()};")
             else:
                 icons_to_download.add((f"https:{profile["photoUrl"]}", path))
 
