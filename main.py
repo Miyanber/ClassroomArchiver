@@ -12,6 +12,21 @@ import mimetypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+print("新しくアーカイブを作る場合は、何も入力せずEnterキーを押してください。")
+print("過去のアーカイブを上書きする場合は、アーカイブの日時をYYYYMMDDHHMMSS形式で入力して下さい。例: 20260309131801")
+while True:
+    result = input(" > ")
+    if result == "":
+        print("新しくアーカイブを作成します。")
+        break
+    elif result.isdigit() and len(result) == 14:
+        archive_date = result
+        print(f"過去のアーカイブを上書きします。アーカイブの日時: {archive_date}")
+        break
+    else:
+        print("無効な入力です。")
+
+
 signal.signal(signal.SIGINT, lambda sig, frame: stop_event.set())
 
 # 引数に過去の日付(YYYYMMDDHHMMSS)を指定できる
@@ -22,7 +37,7 @@ else:
     jst_today_str = jst_today.strftime("%Y%m%d%H%M%S")
     archive_date = jst_today_str
 
-base_dir = f"classroomArchive/archive_{archive_date}"
+base_dir = f"classroomArchive/{archive_date}"
 
 # ロギングの設定
 import logging
@@ -33,7 +48,7 @@ init(autoreset=True)
 
 log_dir = os.path.join(base_dir, "logs")
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, f"archive_{archive_date}.log")
+log_file = os.path.join(log_dir, f"{archive_date}.log")
 
 logger = logging.getLogger("ClassroomArchiver")
 logger.setLevel(logging.DEBUG)
@@ -61,7 +76,10 @@ def log_debug(msg, exc_info=False):
     logger.debug(msg, exc_info=exc_info)
 
 
-log_info(f"保存先: {base_dir}")
+log_info(f"保存先: {Path(base_dir).resolve()}")
+
+log_info("\nOAuth認証を行います。ClassroomをアーカイブするGoogleアカウントでログインして下さい。")
+
 
 def resource_path(path):
     if hasattr(sys, "_MEIPASS"):
