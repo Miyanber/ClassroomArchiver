@@ -12,31 +12,32 @@ import mimetypes
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+import questionary
 
 def main():
-    print("新しくアーカイブを作る場合は、何も入力せずEnterキーを押してください。")
-    print("過去のアーカイブを上書きする場合は、アーカイブの日時をYYYYMMDDHHMMSS形式で入力して下さい。例: 20260309131801")
-    while True:
-        result = input(" > ")
-        if result == "":
-            print("新しくアーカイブを作成します。")
-            jst_today = datetime.now().astimezone(timezone(timedelta(hours=9)))
-            jst_today_str = jst_today.strftime("%Y%m%d%H%M%S")
-            archive_date = jst_today_str
-            base_dir = f"classroomArchive/{archive_date}"
-            break
-        elif result.isdigit() and len(result) == 14:
-            archive_date = result
-            base_dir = f"classroomArchive/{archive_date}"
-            if os.path.exists(base_dir):
-                print(f"過去のアーカイブを上書きします。アーカイブの日時: {archive_date}")
-                break
-            else:
-                print(f"アーカイブが存在しません。アーカイブの日時: {archive_date}")
-                print("アーカイブの日時が正しく入力されているか確認してください。")
-        else:
-            print("無効な入力です。")
+    create_new = True
+    p = Path("./classroomArchive")
+    folders = [f.name for f in p.iterdir() if f.is_dir()]
+    if len(folders) > 0:
+        result = input("過去のアーカイブ（中断されたものを含む）が存在します。利用しますか？ (y/N)")
+        if result.lower() == "y":
+            create_new = False
+            folders.sort(reverse=True)
+            selected = questionary.select(
+                "どのアーカイブを利用しますか？",
+                choices=folders
+            ).ask()
+            archive_date = selected
+            print(f"アーカイブ: {archive_date} を利用します。")
+    if create_new:
+        jst_today = datetime.now().astimezone(timezone(timedelta(hours=9)))
+        jst_today_str = jst_today.strftime("%Y%m%d%H%M%S")
+        archive_date = jst_today_str
+        print(f"アーカイブ: {archive_date} を新しく作成します。")
 
+    base_dir = f"classroomArchive/{archive_date}"
+    
+    log_info(f"保存先: {Path(base_dir).resolve()}")
 
     signal.signal(signal.SIGINT, lambda sig, frame: stop_event.set())
 
@@ -76,8 +77,6 @@ def main():
     def log_debug(msg, exc_info=False):
         logger.debug(msg, exc_info=exc_info)
 
-
-    log_info(f"保存先: {Path(base_dir).resolve()}")
 
     log_info("\nOAuth認証を行います。ClassroomをアーカイブするGoogleアカウントでログインして下さい。")
 
