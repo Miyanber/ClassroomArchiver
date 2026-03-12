@@ -62,12 +62,22 @@ def main():
         if result.lower() == "y":
             create_new = False
             folders.sort(reverse=True)
+            choices = []
+            for name in folders:
+                if len(name) != 14 or not name.isdigit():
+                    continue
+                date = datetime.strptime(name, "%Y%m%d%H%M%S")
+                choices.append(f"{name} ({date.strftime('%Y/%m/%d %H:%M:%S')} 作成)")
             selected = questionary.select(
                 "どのアーカイブを利用しますか？",
-                choices=folders
+                choices=choices,
             ).ask()
-            archive_date = selected
-            log_info(f"アーカイブ: {archive_date} を利用します。")
+            if selected:
+                archive_date = selected.split(" ")[0]
+                log_info(f"アーカイブ: {archive_date} を利用します。")
+            else:
+                # Ctrl + C
+                sys.exit(1)
     if create_new:
         archive_date = jst_today_str
         log_info(f"アーカイブ: {archive_date} を新しく作成します。")
@@ -76,13 +86,11 @@ def main():
     
     log_info(f"保存先: {Path(base_dir).resolve()}")
 
+    import threading
+    thread_local = threading.local()
+    lock = threading.Lock()
+    stop_event = threading.Event()
     signal.signal(signal.SIGINT, lambda sig, frame: stop_event.set())
-
-
-    log_debug(f"保存先: {Path(base_dir).resolve()}")
-
-    log_info("\nOAuth認証を行います。ClassroomをアーカイブするGoogleアカウントでログインして下さい。")
-
 
     def resource_path(path):
         if hasattr(sys, "_MEIPASS"):
@@ -114,6 +122,12 @@ def main():
         "https://www.googleapis.com/auth/drive.readonly",
         "https://www.googleapis.com/auth/drive.file",
     ]
+
+    
+    log_info("\nOAuth認証を行います。ClassroomをアーカイブするGoogleアカウントでログインして下さい。")
+    
+    input("Enterキーを押すと、ログインページに移動します。\n")
+
 
     flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
     creds = flow.run_local_server(port=0)
@@ -222,12 +236,6 @@ def main():
         lambda **kwargs: service.courses().list(**kwargs),
         "courses"
     )
-
-
-    import threading
-    thread_local = threading.local()
-    lock = threading.Lock()
-    stop_event = threading.Event()
 
     user_profiles = {}
     all_icons_to_download = set()
