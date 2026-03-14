@@ -8,6 +8,7 @@ APP_NAME = "ClassroomArchiver"
 dist_dir = "dist"
 release_dir = "release"
 
+readme_path = "README.txt"
 exe_path = os.path.join(dist_dir, "main.exe")
 cred_path = "credentials.json"
 
@@ -23,7 +24,7 @@ if os.path.exists(release_dir):
 
 os.makedirs(release_dir)
 
-shutil.copy(os.path.join(dist_dir, "README.txt")),
+shutil.copy(readme_path, os.path.join(release_dir, "README.txt")),
 shutil.copy(exe_path, os.path.join(release_dir, "main.exe"))
 shutil.copy(cred_path, os.path.join(release_dir, "credentials.json"))
 
