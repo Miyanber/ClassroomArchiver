@@ -1,7 +1,7 @@
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaIoBaseDownload, HttpError
 from googleapiclient.discovery import build
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from datetime import datetime, timezone, timedelta
 from tqdm import tqdm
 import io, requests, os, sys
@@ -161,7 +161,18 @@ def main():
                     
         raise Exception("最大再試行回数を超えてもAPI実行制限が解除されませんでした。")
 
-    env = Environment(loader=FileSystemLoader(materials_dir))
+    env = Environment(
+        loader=FileSystemLoader(materials_dir),
+        autoescape=select_autoescape(["html"]),
+    )
+
+    # javascript: 等の危険なスキームを持つURLを無効化する
+    def safe_url(url):
+        if isinstance(url, str) and url.strip().lower().startswith(("http://", "https://")):
+            return url
+        return "#"
+
+    env.filters["safe_url"] = safe_url
     template = env.get_template("course.html")
 
     archive_folder_id = None

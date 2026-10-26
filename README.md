@@ -9,6 +9,13 @@ Export your Google Classroom into a browsable HTML archive.
 
 ## 利用方法 (開発者向け)
 
+### 動作環境
+
+- Python 3.10 以上
+- Google アカウント（Google Classroom を利用しているもの）
+
+### セットアップ
+
 1. リポジトリをクローンする
 2. 必要なライブラリをインストールする
 
@@ -16,15 +23,29 @@ Export your Google Classroom into a browsable HTML archive.
 pip install -r requirements.txt
 ```
 
-3. Google Cloud でプロジェクトを作成し、Google Classroom API と Google Drive API を有効にする
-4. デスクトップアプリとして OAuth 認証情報を発行し、credentials.json をリポジトリ直下に配置する
-5. main.py を実行する
+3. [Google Cloud Console](https://console.cloud.google.com/) でプロジェクトを作成し、Google Classroom API と Google Drive API を有効にする
+4. 「OAuth 同意画面」を設定する（公開ステータスが「テスト」の場合は、利用する Google アカウントを「テストユーザー」に追加する）
+5. 「認証情報」から **デスクトップアプリ** として OAuth クライアント ID を発行し、ダウンロードした JSON を `credentials.json` という名前でリポジトリ直下に配置する（形式は [credentials.json.example](./credentials.json.example) を参照）
+
+> [!WARNING]
+> `credentials.json` は `.gitignore` 済みです。絶対にコミットしないでください。
+
+6. main.py を実行する
 
 ```bash
 python ./main.py
 ```
 
-6. コンソールの内容に従いブラウザで認証を完了させると、アーカイブが開始されます
+7. コンソールの内容に従いブラウザで認証を完了させると、アーカイブが開始されます
+
+### exe のビルド (Windows)
+
+```bash
+pip install -r requirements-dev.txt
+python build_release.py
+```
+
+`ClassroomArchiver.zip` が生成されます。zip には `credentials.json` が同梱されるため、配布範囲に注意してください。
 
 ## 注意事項
 

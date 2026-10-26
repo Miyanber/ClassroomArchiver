@@ -208,6 +208,10 @@ __marimo__/
 
 # app
 credentials.json
+credentials*.json
+!credentials.json.example
+token.json
+*.exe
 classroomArchive/*
 example.json
 archive_folder_id.txt

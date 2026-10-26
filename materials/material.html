@@ -2,7 +2,7 @@
 <div class="driveFile material">
     {% with drive_file=material.driveFile.driveFile %}
     {% if drive_file.title %}
-    <a target="_blank" href="{% if drive_file.save_type != "download" and drive_file.save_type != "download (skipped)" %}{{ drive_file.alternateLink }}{% else %}driveFiles/id_{{ drive_file.id }}_name_{{ drive_file.title }}{% endif %}">
+    <a target="_blank" href="{% if drive_file.save_type != "download" and drive_file.save_type != "download (skipped)" %}{{ drive_file.alternateLink | safe_url }}{% else %}driveFiles/id_{{ drive_file.id }}_name_{{ drive_file.title }}{% endif %}">
         <p class="link-title">{{ drive_file.title }}</p>
         <p class="link-text">
             {% if drive_file.file_type %}{{ drive_file.file_type }}{% else %}ドライブファイル{% endif %}
@@ -10,7 +10,7 @@
         </p>
     </a>
     {% else %}
-    <a target="_blank" href="{{ drive_file.alternateLink }}">
+    <a target="_blank" href="{{ drive_file.alternateLink | safe_url }}">
         <p class="link-title">不明なファイル</p>
         <p class="link-text">不明</p>
     </a>
@@ -19,35 +19,35 @@
 </div>
 {% elif material.youtubeVideo %}
 <div class="youtubeVideo material">
-    <a target="_blank" href="{{ material.youtubeVideo.alternateLink }}">
+    <a target="_blank" href="{{ material.youtubeVideo.alternateLink | safe_url }}">
         <p class="link-title">{{ material.youtubeVideo.title }}</p>
         <p class="link-text">YouTube 動画</p>
     </a>
 </div>
 {% elif material.link %}
 <div class="link material">
-    <a target="_blank" href="{{ material.link.url }}">
+    <a target="_blank" href="{{ material.link.url | safe_url }}">
         <p class="link-title">{% if material.link.title %}{{ material.link.title }}{% else %}リンク{% endif %}</p>
         <p class="link-text">{{ material.link.url }}</p>
     </a>
 </div>
 {% elif material.form %}
 <div class="form material">
-    <a target="_blank" href="{{ material.form.formUrl }}">
+    <a target="_blank" href="{{ material.form.formUrl | safe_url }}">
         <p class="link-title">{% if material.form.title %}{{ material.form.title }}{% else %}フォーム{% endif %}</p>
         <p class="link-text">{{ material.form.formUrl }}</p>
     </a>
 </div>
 {% elif material.gem %}
 <div class="gem material">
-    <a target="_blank" href="{{ material.gem.url }}">
+    <a target="_blank" href="{{ material.gem.url | safe_url }}">
         <p class="link-title">{% if material.gem.title %}{{ material.gem.title }}{% else %}リンク{% endif %}</p>
         <p class="link-text">{{ material.gem.url }}</p>
     </a>
 </div>
 {% elif material.notebook %}
 <div class="notebook material">
-    <a target="_blank" href="{{ material.notebook.url }}">
+    <a target="_blank" href="{{ material.notebook.url | safe_url }}">
         <p class="link-title">{% if material.notebook.title %}{{ material.notebook.title }}{% else %}リンク{% endif %}</p>
         <p class="link-text">{{ material.notebook.url }}</p>
     </a>
